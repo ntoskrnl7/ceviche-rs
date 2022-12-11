@@ -235,6 +235,64 @@ impl ControllerInterface for WindowsController {
             Ok(())
         }
     }
+
+    fn pause(&mut self) -> Result<(), Error> {
+        unsafe {
+            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
+            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+
+            if ControlService(
+                service.handle,
+                SERVICE_CONTROL_PAUSE,
+                &mut self.service_status,
+            ) != 0
+            {
+                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+                    if self.service_status.dwCurrentState != SERVICE_PAUSE_PENDING {
+                        break;
+                    }
+                    thread::sleep(time::Duration::from_millis(250));
+                }
+            } else {
+                return Err(Error::new("ControlService: failed to pause service"));
+            }
+
+            if self.service_status.dwCurrentState != SERVICE_STOPPED {
+                return Err(Error::new("Failed to pause service"));
+            }
+
+            Ok(())
+        }
+    }
+
+    fn r#continue(&mut self) -> Result<(), Error> {
+        unsafe {
+            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
+            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+
+            if ControlService(
+                service.handle,
+                SERVICE_CONTROL_CONTINUE,
+                &mut self.service_status,
+            ) != 0
+            {
+                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+                    if self.service_status.dwCurrentState != SERVICE_CONTINUE_PENDING {
+                        break;
+                    }
+                    thread::sleep(time::Duration::from_millis(250));
+                }
+            } else {
+                return Err(Error::new("ControlService: failed to continue service"));
+            }
+
+            if self.service_status.dwCurrentState != SERVICE_STOPPED {
+                return Err(Error::new("Failed to continue service"));
+            }
+
+            Ok(())
+        }
+    }
 }
 
 impl WindowsController {

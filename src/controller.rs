@@ -55,6 +55,10 @@ pub trait ControllerInterface {
             fn load(&mut self) -> Result<(), Error>;
             /// Unloads the agent service.
             fn unload(&mut self) -> Result<(), Error>;
+        } else if #[cfg(target_os = "windows")] {
+
+            fn pause(&mut self) -> Result<(), Error>;
+            fn r#continue(&mut self) -> Result<(), Error>;
         }
     }
 }
