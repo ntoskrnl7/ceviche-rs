@@ -1,5 +1,5 @@
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, read, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,8 +15,34 @@ use crate::session;
 use crate::Error;
 use crate::ServiceEvent;
 
+use super::BasicServiceStatus;
+
 type LinuxServiceMainWrapperFn = extern "system" fn(args: Vec<String>);
 pub type Session = session::Session_<String>;
+
+fn systemctl_execute_with_result(args: &[&str]) -> Result<String, Error> {
+    let mut process = Command::new("systemctl");
+    process.args(args);
+
+    let output = process
+        .output()
+        .map_err(|e| Error::new(&format!("Failed to execute command {}: {}", args[0], e)))?;
+
+    if !output.status.success() {
+        return Err(Error::new(&format!(
+            "Command \"{}\" failed ({}): {}",
+            args[0],
+            output.status.code().expect("Process terminated by signal"),
+            std::str::from_utf8(&output.stderr).unwrap_or_default()
+        )));
+    }
+
+    if !output.stdout.is_empty() {
+        info!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
 
 fn systemctl_execute(args: &[&str]) -> Result<(), Error> {
     let mut process = Command::new("systemctl");
@@ -74,6 +100,59 @@ pub struct LinuxController {
     pub config: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum ActiveState {
+    Running,
+    Exited,
+    Waiting,
+    Dead,
+}
+
+#[derive(Debug)]
+pub enum InactiveState {
+    Dead,
+    Exited,
+    Waiting,
+    Resetting,
+}
+
+#[derive(Debug)]
+pub enum ServiceState {
+    Active(ActiveState),
+    Inactive(InactiveState),
+}
+
+#[derive(Debug)]
+pub struct ServiceStatus {
+    pub state: ServiceState,
+    pub cmdline: String,
+    pub pid: u32,
+    pub is_failed: bool,
+    pub details: String,
+}
+
+impl ServiceStatus {
+    pub fn is_active(&self) -> bool {
+        matches!(&self.state, ServiceState::Active(_))
+    }
+    pub fn is_inactive(&self) -> bool {
+        matches!(&self.state, ServiceState::Inactive(_))
+    }
+}
+
+impl BasicServiceStatus for ServiceStatus {
+    fn is_running(&self) -> bool {
+        matches!(&self.state, ServiceState::Active(state) if matches!(state, ActiveState::Running))
+    }
+
+    fn is_failed(&self) -> bool {
+        self.is_failed
+    }
+
+    fn get_cmdline(&self) -> &str {
+        &self.cmdline
+    }
+}
 impl LinuxController {
     pub fn new(service_name: &str, display_name: &str, description: &str) -> LinuxController {
         LinuxController {
@@ -176,6 +255,62 @@ impl ControllerInterface for LinuxController {
 
     fn stop(&mut self) -> Result<(), Error> {
         systemd_stop_daemon(&self.service_name)
+    }
+
+    fn get_status(&self) -> Result<ServiceStatus, Error> {
+        let pid = systemctl_execute_with_result(&["show", "-p", "MainPID", &self.service_name])?
+            .trim_start_matches("MainPID=")
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+
+        let is_failed =
+            if let Ok(ret) = systemctl_execute_with_result(&["is-failed", &self.service_name]) {
+                ret.contains("failed")
+            } else {
+                false
+            };
+
+        let cmdline = String::from_utf8(read(&format!("/proc/{}/cmdline", pid)).unwrap()).unwrap();
+
+        let result = systemctl_execute_with_result(&["status", &self.service_name])?;
+        if result.contains("active (") {
+            Ok(ServiceStatus {
+                state: if result.contains(" (running)") {
+                    ServiceState::Active(ActiveState::Running)
+                } else if result.contains(" (exited)") {
+                    ServiceState::Active(ActiveState::Exited)
+                } else if result.contains(" (waiting)") {
+                    ServiceState::Active(ActiveState::Waiting)
+                } else if result.contains(" (dead)") {
+                    ServiceState::Active(ActiveState::Dead)
+                } else {
+                    return Err(Error::new(&format!("Invalid ActiveState : {}", result)));
+                },
+                details: result,
+                cmdline,
+                pid,
+                is_failed,
+            })
+        } else {
+            Ok(ServiceStatus {
+                state: if result.contains(" (dead)") {
+                    ServiceState::Inactive(InactiveState::Dead)
+                } else if result.contains(" (exited)") {
+                    ServiceState::Inactive(InactiveState::Exited)
+                } else if result.contains(" (waiting)") {
+                    ServiceState::Inactive(InactiveState::Waiting)
+                } else if result.contains(" (resetting)") {
+                    ServiceState::Inactive(InactiveState::Resetting)
+                } else {
+                    return Err(Error::new(&format!("Invalid ActiveState : {}", result)));
+                },
+                details: result,
+                cmdline,
+                pid,
+                is_failed,
+            })
+        }
     }
 }
 

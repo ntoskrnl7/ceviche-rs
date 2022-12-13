@@ -1,8 +1,8 @@
 use std::ffi::OsStr;
 use std::iter::once;
-use std::os::windows::ffi::OsStrExt;
-use std::ptr;
+use std::os::windows::prelude::OsStrExt;
 use std::sync::mpsc;
+use std::{fmt, ptr};
 use std::{thread, time};
 
 use widestring::WideCString;
@@ -14,12 +14,14 @@ use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 use winapi::um::winsvc::*;
 use winapi::um::winuser::*;
-use winapi::{self, STRUCT};
+use winapi::STRUCT;
 
 use crate::controller::{ControllerInterface, ServiceMainFn};
 use crate::session;
 use crate::Error;
 use crate::ServiceEvent;
+
+use super::BasicServiceStatus;
 
 static mut SERVICE_CONTROL_HANDLE: SERVICE_STATUS_HANDLE = ptr::null_mut();
 
@@ -108,10 +110,56 @@ pub struct WindowsController {
     pub controls_accepted: DWORD,
 }
 
+pub struct ServiceStatus {
+    pub native_status: SERVICE_STATUS,
+    pub cmdline: String,
+}
+
+extern crate winapi;
+use winapi::um::winsvc::SERVICE_STATUS;
+
+impl fmt::Debug for ServiceStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceStatus")
+            .field("status.dwCheckPoint", &self.native_status.dwCheckPoint)
+            .field(
+                "status.dwControlsAccepted",
+                &self.native_status.dwControlsAccepted,
+            )
+            .field("status.dwCurrentState", &self.native_status.dwCurrentState)
+            .field(
+                "status.dwServiceSpecificExitCode",
+                &self.native_status.dwServiceSpecificExitCode,
+            )
+            .field("status.dwServiceType", &self.native_status.dwServiceType)
+            .field("status.dwWaitHint", &self.native_status.dwWaitHint)
+            .field(
+                "status.dwWin32ExitCode",
+                &self.native_status.dwWin32ExitCode,
+            )
+            .field("cmdline", &self.cmdline)
+            .finish()
+    }
+}
+
+impl BasicServiceStatus for ServiceStatus {
+    fn is_running(&self) -> bool {
+        self.native_status.dwCurrentState == SERVICE_RUNNING
+    }
+
+    fn is_failed(&self) -> bool {
+        self.native_status.dwWin32ExitCode != 0
+    }
+
+    fn get_cmdline(&self) -> &str {
+        &self.cmdline
+    }
+}
+
 impl ControllerInterface for WindowsController {
     fn create(&mut self) -> Result<(), Error> {
         unsafe {
-            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CREATE_SERVICE)?;
 
             let filename = get_filename();
             let tag_id = 0;
@@ -157,8 +205,11 @@ impl ControllerInterface for WindowsController {
 
     fn delete(&mut self) -> Result<(), Error> {
         unsafe {
-            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
-            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CONNECT)?;
+            let service = service_manager.open_service(
+                &self.service_name,
+                SERVICE_QUERY_STATUS | SERVICE_STOP | DELETE,
+            )?;
 
             if ControlService(
                 service.handle,
@@ -166,7 +217,7 @@ impl ControllerInterface for WindowsController {
                 &mut self.service_status,
             ) != 0
             {
-                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+                while QueryServiceStatus(service.handle, &mut self.service_status) == TRUE {
                     if self.service_status.dwCurrentState != SERVICE_STOP_PENDING {
                         break;
                     }
@@ -187,11 +238,12 @@ impl ControllerInterface for WindowsController {
 
     fn start(&mut self) -> Result<(), Error> {
         unsafe {
-            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
-            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CONNECT)?;
+            let service = service_manager
+                .open_service(&self.service_name, SERVICE_QUERY_STATUS | SERVICE_START)?;
 
-            if StartServiceW(service.handle, 0, ptr::null_mut()) != 0 {
-                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+            if StartServiceW(service.handle, 0, ptr::null_mut()) == TRUE {
+                while QueryServiceStatus(service.handle, &mut self.service_status) == TRUE {
                     if self.service_status.dwCurrentState != SERVICE_START_PENDING {
                         break;
                     }
@@ -209,8 +261,9 @@ impl ControllerInterface for WindowsController {
 
     fn stop(&mut self) -> Result<(), Error> {
         unsafe {
-            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
-            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CONNECT)?;
+            let service = service_manager
+                .open_service(&self.service_name, SERVICE_QUERY_STATUS | SERVICE_STOP)?;
 
             if ControlService(
                 service.handle,
@@ -218,7 +271,7 @@ impl ControllerInterface for WindowsController {
                 &mut self.service_status,
             ) != 0
             {
-                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+                while QueryServiceStatus(service.handle, &mut self.service_status) == TRUE {
                     if self.service_status.dwCurrentState != SERVICE_STOP_PENDING {
                         break;
                     }
@@ -238,8 +291,11 @@ impl ControllerInterface for WindowsController {
 
     fn pause(&mut self) -> Result<(), Error> {
         unsafe {
-            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
-            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CONNECT)?;
+            let service = service_manager.open_service(
+                &self.service_name,
+                SERVICE_QUERY_STATUS | SERVICE_PAUSE_CONTINUE,
+            )?;
 
             if ControlService(
                 service.handle,
@@ -247,7 +303,7 @@ impl ControllerInterface for WindowsController {
                 &mut self.service_status,
             ) != 0
             {
-                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+                while QueryServiceStatus(service.handle, &mut self.service_status) == TRUE {
                     if self.service_status.dwCurrentState != SERVICE_PAUSE_PENDING {
                         break;
                     }
@@ -257,7 +313,7 @@ impl ControllerInterface for WindowsController {
                 return Err(Error::new("ControlService: failed to pause service"));
             }
 
-            if self.service_status.dwCurrentState != SERVICE_STOPPED {
+            if self.service_status.dwCurrentState != SERVICE_PAUSED {
                 return Err(Error::new("Failed to pause service"));
             }
 
@@ -267,8 +323,11 @@ impl ControllerInterface for WindowsController {
 
     fn r#continue(&mut self) -> Result<(), Error> {
         unsafe {
-            let service_manager = ServiceControlManager::open(SC_MANAGER_ALL_ACCESS)?;
-            let service = service_manager.open_service(&self.service_name, SERVICE_ALL_ACCESS)?;
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CONNECT)?;
+            let service = service_manager.open_service(
+                &self.service_name,
+                SERVICE_QUERY_STATUS | SERVICE_PAUSE_CONTINUE,
+            )?;
 
             if ControlService(
                 service.handle,
@@ -276,7 +335,7 @@ impl ControllerInterface for WindowsController {
                 &mut self.service_status,
             ) != 0
             {
-                while QueryServiceStatus(service.handle, &mut self.service_status) != 0 {
+                while QueryServiceStatus(service.handle, &mut self.service_status) == TRUE {
                     if self.service_status.dwCurrentState != SERVICE_CONTINUE_PENDING {
                         break;
                     }
@@ -286,11 +345,62 @@ impl ControllerInterface for WindowsController {
                 return Err(Error::new("ControlService: failed to continue service"));
             }
 
-            if self.service_status.dwCurrentState != SERVICE_STOPPED {
+            if self.service_status.dwCurrentState != SERVICE_RUNNING {
                 return Err(Error::new("Failed to continue service"));
             }
 
             Ok(())
+        }
+    }
+
+    fn get_status(&self) -> Result<ServiceStatus, Error> {
+        unsafe {
+            let service_manager = ServiceControlManager::open(SC_MANAGER_CONNECT)?;
+            let service = service_manager.open_service(
+                &self.service_name,
+                SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS,
+            )?;
+            let mut service_status = self.service_status;
+            if QueryServiceStatus(service.handle, &mut service_status) == FALSE {
+                return Err(Error::new(
+                    "Failed to get service status (QueryServiceStatus)",
+                ));
+            }
+
+            let mut query_service_config = vec![0u8; 1024];
+            let mut bytes_needed: u32 = 0;
+
+            if QueryServiceConfigW(
+                service.handle,
+                query_service_config.as_mut_ptr() as _,
+                query_service_config.len() as u32,
+                &mut bytes_needed,
+            ) == FALSE
+            {
+                query_service_config.resize(bytes_needed as usize, 0u8);
+
+                if QueryServiceConfigW(
+                    service.handle,
+                    query_service_config.as_mut_ptr() as _,
+                    query_service_config.len() as u32,
+                    &mut bytes_needed,
+                ) == FALSE
+                {
+                    return Err(Error::new(&format!(
+                        "Failed to get service status (QueryServiceConfigW : {})",
+                        bytes_needed
+                    )));
+                }
+            }
+
+            Ok(ServiceStatus {
+                native_status: service_status,
+                cmdline: WideCString::from_ptr_str(
+                    (*(query_service_config.as_ptr() as *const QUERY_SERVICE_CONFIGW))
+                        .lpBinaryPathName,
+                )
+                .to_string_lossy(),
+            })
         }
     }
 }

@@ -1,9 +1,8 @@
-
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::{PathBuf};
-use std::process::{Command};
-use serde::{Serialize, Deserialize};
+use std::path::PathBuf;
+use std::process::Command;
 
 use crate::pwsh::*;
 
@@ -75,16 +74,24 @@ impl CmdletService {
         let service_manifest = get_service_manifest()?;
         let module_name = service_manifest.get_module_name().to_string();
         let module_manifest = get_module_manifest(&module_name)?;
-    
+
         let service_name = service_manifest.service_name.to_string();
-        let display_name = service_manifest.display_name.unwrap_or(service_name.to_string());
-        let description = service_manifest.description.unwrap_or(module_manifest.description.to_string());
-        let company_name = service_manifest.company_name.unwrap_or(module_manifest.company_name.to_string());
+        let display_name = service_manifest
+            .display_name
+            .unwrap_or(service_name.to_string());
+        let description = service_manifest
+            .description
+            .unwrap_or(module_manifest.description.to_string());
+        let company_name = service_manifest
+            .company_name
+            .unwrap_or(module_manifest.company_name.to_string());
         let working_dir = service_manifest.working_dir.to_string();
         let start_command = service_manifest.start_command.to_string();
         let stop_command = service_manifest.stop_command.to_string();
-        let log_file = service_manifest.log_file.unwrap_or(format!("{}.log", service_name.as_str()));
-    
+        let log_file = service_manifest
+            .log_file
+            .unwrap_or(format!("{}.log", service_name.as_str()));
+
         Some(CmdletService {
             service_name: service_name.to_string(),
             display_name: display_name.to_string(),
@@ -134,7 +141,8 @@ impl CmdletService {
     pub fn start(&self) {
         let cmdlet_name = self.get_module_name();
         let function = self.get_start_command();
-        let output = run_cmdlet_function(self, cmdlet_name, &function).expect("unable to run cmdlet function");
+        let output = run_cmdlet_function(self, cmdlet_name, &function)
+            .expect("unable to run cmdlet function");
         let stdout = String::from_utf8(output.stdout).expect("unable to convert output.stdout");
         let stderr = String::from_utf8(output.stderr).expect("unable to convert output.stderr");
         info!("{}:\n {} {}", function, stdout, stderr);
@@ -143,25 +151,35 @@ impl CmdletService {
     pub fn stop(&self) {
         let cmdlet_name = self.get_module_name();
         let function = self.get_stop_command();
-        let output = run_cmdlet_function(self, cmdlet_name, &function).expect("unable to run cmdlet function");
+        let output = run_cmdlet_function(self, cmdlet_name, &function)
+            .expect("unable to run cmdlet function");
         let stdout = String::from_utf8(output.stdout).expect("unable to convert output.stdout");
         let stderr = String::from_utf8(output.stderr).expect("unable to convert output.stderr");
         info!("{}:\n {} {}", function, stdout, stderr);
     }
 }
 
-fn run_cmdlet_function(service: &CmdletService, cmdlet: &str, function: &str) -> std::io::Result<std::process::Output> {
+fn run_cmdlet_function(
+    service: &CmdletService,
+    cmdlet: &str,
+    function: &str,
+) -> std::io::Result<std::process::Output> {
     let powershell = find_powershell().expect("unable to find PowerShell");
-    let working_dir = service.get_working_dir().expect("unable to get working directory");
+    let working_dir = service
+        .get_working_dir()
+        .expect("unable to get working directory");
 
     let command = format!(
         "Import-Module -Name {};\n\
-        {}", cmdlet, function);
+        {}",
+        cmdlet, function
+    );
 
     let encoded_command = encode_command(command.as_str());
 
     Command::new(&powershell)
-        .arg("-EncodedCommand").arg(encoded_command.as_str())
+        .arg("-EncodedCommand")
+        .arg(encoded_command.as_str())
         .current_dir(working_dir)
         .output()
 }

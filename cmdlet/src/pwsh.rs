@@ -1,7 +1,6 @@
-
-use std::path::{PathBuf};
-use std::process::{Command};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Serialize, Deserialize)]
 pub struct PSModuleManifest {
@@ -35,13 +34,16 @@ pub fn find_cmdlet_base(module_name: &str) -> Option<PathBuf> {
 
     let command = format!(
         "Get-Module -Name {} -ListAvailable | Select-Object -First 1 | foreach {{ $_.ModuleBase }}",
-        module_name);
+        module_name
+    );
 
     let encoded_command = encode_command(command.as_str());
 
     let output = Command::new(&powershell)
-        .arg("-EncodedCommand").arg(encoded_command.as_str())
-        .output().ok()?;
+        .arg("-EncodedCommand")
+        .arg(encoded_command.as_str())
+        .output()
+        .ok()?;
 
     let module_base = String::from_utf8(output.stdout).ok()?;
     return Some(PathBuf::from(module_base.trim()));
@@ -54,13 +56,16 @@ pub fn get_module_manifest(module_name: &str) -> Option<PSModuleManifest> {
 
     let command = format!(
         "Import-PowerShellDataFile -Path \"{}\\{}.psd1\" | ConvertTo-Json",
-        manifest_path, module_name);
+        manifest_path, module_name
+    );
 
     let encoded_command = encode_command(command.as_str());
 
     let output = Command::new(&powershell)
-        .arg("-EncodedCommand").arg(encoded_command.as_str())
-        .output().ok()?;
+        .arg("-EncodedCommand")
+        .arg(encoded_command.as_str())
+        .output()
+        .ok()?;
 
     let json_output = String::from_utf8(output.stdout).ok()?;
     serde_json::from_str(json_output.as_str()).ok()

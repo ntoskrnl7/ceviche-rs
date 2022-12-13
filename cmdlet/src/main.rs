@@ -81,7 +81,7 @@ fn cmdlet_service_main(
             match control_code {
                 ServiceEvent::Stop => {
                     service.stop();
-                    break
+                    break;
                 }
                 _ => (),
             }
@@ -96,8 +96,11 @@ Service!("cmdlet", cmdlet_service_main);
 
 fn main() {
     let service = CmdletService::load().expect("unable to load cmdlet service");
-    let mut controller = Controller::new(service.get_service_name(),
-        service.get_display_name(), service.get_description());
+    let mut controller = Controller::new(
+        service.get_service_name(),
+        service.get_display_name(),
+        service.get_description(),
+    );
 
     if let Some(cmd) = env::args().nth(1) {
         match cmd.as_str() {
@@ -124,11 +127,12 @@ fn main() {
             "run" => {
                 let (tx, rx) = mpsc::channel();
                 let _tx = tx.clone();
-        
+
                 ctrlc::set_handler(move || {
                     let _ = tx.send(ServiceEvent::Stop);
-                }).expect("Failed to register Ctrl-C handler");
-        
+                })
+                .expect("Failed to register Ctrl-C handler");
+
                 cmdlet_service_main(rx, _tx, vec![], true);
             }
             _ => {

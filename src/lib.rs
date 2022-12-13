@@ -151,3 +151,93 @@ impl<T> fmt::Display for ServiceEvent<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    cfg_if! {
+        if #[cfg(target_os = "windows")] {
+            use std::mem;
+            use winapi::shared::minwindef::{DWORD, LPVOID};
+            use winapi::um::handleapi::CloseHandle;
+            use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
+            use winapi::um::securitybaseapi::GetTokenInformation;
+            use winapi::um::winnt::{TokenElevation, HANDLE, TOKEN_ELEVATION, TOKEN_QUERY};
+        } else {
+            use std::env;
+        }
+    }
+
+    fn is_admin() -> bool {
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                env::var("EUID").unwrap_or_default() == "0" || env::var("UID").unwrap_or_default() == "0"
+            } else if #[cfg(target_os = "macos")] {
+                env::var("USER").unwrap_or_default() == "root"
+            } else if #[cfg(target_os = "windows")] {
+                unsafe {
+                    let mut token_handle: HANDLE = mem::zeroed();
+                    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) != 0 {
+                        let mut token_elevation: TOKEN_ELEVATION = mem::zeroed();
+                        let mut size: DWORD = 0;
+                        let ret = GetTokenInformation(
+                            token_handle,
+                            TokenElevation,
+                            &mut token_elevation as *mut _ as LPVOID,
+                            mem::size_of::<TOKEN_ELEVATION>() as u32,
+                            &mut size,
+                        );
+                        CloseHandle(token_handle);
+                        if ret != 0 {
+                            return token_elevation.TokenIsElevated != 0;
+                        }
+                    }
+                }
+                false
+            } else {
+                todo!();
+            }
+        }
+    }
+
+    use crate::controller::{BasicServiceStatus, Controller, ControllerInterface};
+
+    #[test]
+    fn create_delete_test() {
+        if is_admin() {
+            let mut controller = Controller::new("ceviche-rs-test-svc", "", "");
+            assert!(controller.create().is_ok());
+            assert!(controller.delete().is_ok());
+        }
+    }
+
+    #[test]
+    fn status_test() {
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let controller = Controller::new("dbus", "", "");
+                use crate::controller::ServiceState;
+            } else if #[cfg(target_os = "windows")] {
+                let controller = Controller::new("ntfs", "", "");
+            }
+        }
+        let status = controller.get_status();
+        assert_eq!(status.is_ok(), true);
+        if let Ok(status) = status {
+            status.get_cmdline();
+            status.is_running();
+            status.is_failed();
+            println!("status: {:?}", status);
+            cfg_if! {
+                if #[cfg(target_os = "linux")] {
+                    status.is_active();
+                    if matches!(status.state, ServiceState::Active(_)) {
+                        println!("is active: {:?}", status.state);
+                    }
+                } else if #[cfg(target_os = "windows")] {
+                    println!("is active: {:?}", status);
+                } else if #[cfg(target_os = "macos")] {
+                }
+            }
+        }
+    }
+}

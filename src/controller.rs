@@ -3,10 +3,17 @@ use std::sync::mpsc;
 use crate::Error;
 use crate::ServiceEvent;
 
+pub trait BasicServiceStatus {
+    fn is_running(&self) -> bool;
+    fn is_failed(&self) -> bool;
+    fn get_cmdline(&self) -> &str;
+}
+
 cfg_if! {
     if #[cfg(windows)] {
         mod windows;
         pub use self::windows::WindowsController as Controller;
+        pub use self::windows::ServiceStatus as ServiceStatus;
         pub use self::windows::Session as Session;
         pub use self::windows::dispatch;
     } else if #[cfg(target_os = "macos")] {
@@ -18,6 +25,10 @@ cfg_if! {
     } else if #[cfg(target_os = "linux")] {
         mod linux;
         pub use self::linux::LinuxController as Controller;
+        pub use self::linux::ServiceStatus as ServiceStatus;
+        pub use self::linux::ServiceState as ServiceState;
+        pub use self::linux::ActiveState as ActiveState;
+        pub use self::linux::InactiveState as InactiveState;
         pub use self::linux::Session as Session;
         pub use self::linux::dispatch;
     } else {
@@ -49,6 +60,7 @@ pub trait ControllerInterface {
     fn start(&mut self) -> Result<(), Error>;
     /// Stops the service.
     fn stop(&mut self) -> Result<(), Error>;
+
     cfg_if! {
         if #[cfg(target_os = "macos")] {
             /// Loads the agent service.
@@ -56,9 +68,15 @@ pub trait ControllerInterface {
             /// Unloads the agent service.
             fn unload(&mut self) -> Result<(), Error>;
         } else if #[cfg(target_os = "windows")] {
-
+            // Queries the status for the service.
+            fn get_status(&self) -> Result<ServiceStatus, Error>;
+            // Pauses the service.
             fn pause(&mut self) -> Result<(), Error>;
+            // Continues the service.
             fn r#continue(&mut self) -> Result<(), Error>;
+        } else if #[cfg(target_os = "linux")] {
+            // Queries the status for the service.
+            fn get_status(&self) -> Result<ServiceStatus, Error>;
         }
     }
 }
